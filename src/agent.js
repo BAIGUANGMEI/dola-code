@@ -53,6 +53,11 @@ export async function runAgent({ messages, client, callTool, ui = createOutput()
       ui.notesEnd();
       notesStarted = false;
     };
+    let reasoningNotesOpen = false;
+    let contentMode = "pending";
+    let pendingContent = "";
+    let contentRoutedAsNotes = false;
+    const pendingContentLimit = 160;
     const contentRouter = createContentRouter({
       onAnswerStart: answerStart,
       onAnswerDelta: (text) => ui.answerDelta(text),
@@ -64,29 +69,82 @@ export async function runAgent({ messages, client, callTool, ui = createOutput()
       },
       onNotesEnd: notesEnd
     });
+    const writeContentDelta = (text) => {
+      if (reasoningNotesOpen) {
+        notesEnd();
+        reasoningNotesOpen = false;
+      }
+      if (contentMode === "notes") {
+        notesStart();
+        contentRoutedAsNotes = true;
+        turn.notes += text;
+        ui.notesDelta(text);
+        return;
+      }
+      if (contentMode === "answer") {
+        contentRouter.write(text);
+        return;
+      }
+
+      pendingContent += text;
+      if (pendingContent.length >= pendingContentLimit) flushPendingContentAsAnswer();
+    };
+    const flushPendingContentAsAnswer = () => {
+      if (!pendingContent) return;
+      contentMode = "answer";
+      contentRouter.write(pendingContent);
+      pendingContent = "";
+    };
+    const flushPendingContentAsNotes = () => {
+      if (contentMode === "answer") {
+        contentRouter.closeAnswer();
+      }
+      contentMode = "notes";
+      if (!pendingContent) return;
+      notesStart();
+      contentRoutedAsNotes = true;
+      turn.notes += pendingContent;
+      ui.notesDelta(pendingContent);
+      pendingContent = "";
+    };
     try {
       response = await client.chatCompletions({
         messages,
         tools: toolDefinitions,
         onContentDelta: (text) => {
-          contentRouter.write(text);
+          writeContentDelta(text);
         },
         onReasoningDelta: (text) => {
+          if (pendingContent) {
+            flushPendingContentAsNotes();
+            contentMode = "pending";
+          }
           if (answerStarted) {
-            turn.notes += text;
-            return;
+            contentRouter.closeAnswer();
           }
           if (!notesStarted) {
             stopSpinner();
             ui.notesStart();
             notesStarted = true;
           }
+          reasoningNotesOpen = true;
           turn.notes += text;
           ui.notesDelta(text);
+        },
+        onToolCallDelta: () => {
+          flushPendingContentAsNotes();
         }
       });
     } finally {
       stopSpinner();
+      const hasToolCalls = response?.message?.tool_calls?.length;
+      if (pendingContent) {
+        if (hasToolCalls) {
+          flushPendingContentAsNotes();
+        } else {
+          flushPendingContentAsAnswer();
+        }
+      }
       contentRouter.flush();
       notesEnd();
       answerEnd();
@@ -119,7 +177,7 @@ export async function runAgent({ messages, client, callTool, ui = createOutput()
       return log;
     }
 
-    if (assistant.content) {
+    if (assistant.content && !contentRoutedAsNotes) {
       turn.notes += `${turn.notes ? "\n\n" : ""}Assistant step ${step} note:\n${assistant.content}`;
     }
 

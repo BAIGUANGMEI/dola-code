@@ -53,60 +53,84 @@ export function splitAssistantContent(content = "") {
 }
 
 export function createContentRouter({ onAnswerStart, onAnswerDelta, onAnswerEnd, onNotesStart, onNotesDelta, onNotesEnd }) {
-  let buffer = "";
   let mode = "unknown";
   let answerOpen = false;
   let notesOpen = false;
+  let lineStart = true;
+  let pendingHeading = "";
 
   return {
     write(chunk) {
-      buffer += String(chunk || "");
-      drainCompleteLines();
+      for (const char of String(chunk || "")) routeChar(char);
     },
 
     flush() {
-      if (buffer) routeLine(buffer, false);
-      buffer = "";
+      flushPendingHeading();
       closeNotes();
+      closeAnswer();
+    },
+
+    closeAnswer() {
       closeAnswer();
     }
   };
 
-  function drainCompleteLines() {
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) routeLine(`${line}\n`, true);
-  }
-
-  function routeLine(lineWithMaybeNewline, hasNewline) {
-    const rawLine = hasNewline ? lineWithMaybeNewline.slice(0, -1) : lineWithMaybeNewline;
-    const heading = parseSectionHeading(rawLine);
-    if (heading) {
-      if (heading.type === "notes") {
-        closeAnswer();
-        openNotes();
-        mode = "notes";
+  function routeChar(char) {
+    if (lineStart || pendingHeading) {
+      pendingHeading += char;
+      const rawLine = pendingHeading.replace(/\r?\n$/, "");
+      if (char === "\n") {
+        routePendingLine(rawLine);
+        pendingHeading = "";
+        lineStart = true;
         return;
       }
-      closeNotes();
-      openAnswer();
-      mode = "answer";
+      if (isPotentialHeading(rawLine)) return;
+      flushPendingHeading();
       return;
     }
 
-    if (mode === "unknown") {
-      mode = "answer";
-      openAnswer();
-    }
+    routeText(char);
+    lineStart = char === "\n";
+  }
 
+  function routePendingLine(rawLine) {
+    const heading = parseSectionHeading(rawLine);
+    if (heading) {
+      switchMode(heading.type);
+      return;
+    }
+    routeText(`${rawLine}\n`);
+  }
+
+  function flushPendingHeading() {
+    if (!pendingHeading) return;
+    routeText(pendingHeading);
+    lineStart = pendingHeading.endsWith("\n");
+    pendingHeading = "";
+  }
+
+  function routeText(text) {
+    if (mode === "unknown") mode = "answer";
     if (mode === "notes") {
       openNotes();
-      onNotesDelta(lineWithMaybeNewline);
+      onNotesDelta(text);
       return;
     }
-
     openAnswer();
-    onAnswerDelta(lineWithMaybeNewline);
+    onAnswerDelta(text);
+  }
+
+  function switchMode(type) {
+    if (type === "notes") {
+      closeAnswer();
+      openNotes();
+      mode = "notes";
+      return;
+    }
+    closeNotes();
+    openAnswer();
+    mode = "answer";
   }
 
   function openAnswer() {
@@ -140,6 +164,13 @@ function parseSectionHeading(line) {
   if (NOTE_LABELS.has(label)) return { type: "notes", label };
   if (ANSWER_LABELS.has(label)) return { type: "answer", label };
   return null;
+}
+
+function isPotentialHeading(line) {
+  const label = normalizeHeading(line);
+  if (!label) return true;
+  if (label.length > 40) return false;
+  return [...NOTE_LABELS, ...ANSWER_LABELS].some((heading) => heading.startsWith(label));
 }
 
 function normalizeHeading(line) {

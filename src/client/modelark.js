@@ -22,7 +22,7 @@ export class ModelArkClient {
     this.maxOutputTokens = maxOutputTokens;
   }
 
-  async chatCompletions({ messages, tools, temperature = 0.2, maxOutputTokens = this.maxOutputTokens, onContentDelta, onReasoningDelta }) {
+  async chatCompletions({ messages, tools, temperature = 0.2, maxOutputTokens = this.maxOutputTokens, onContentDelta, onReasoningDelta, onToolCallDelta }) {
     if (!this.apiKey) {
       throw new Error("Missing API key. Run /init to save one in ~/.dola-code/config.json or .dola-code/config.json.");
     }
@@ -68,7 +68,8 @@ export class ModelArkClient {
         elapsedStartedAt: startedAt,
         debug: this.debug,
         onContentDelta,
-        onReasoningDelta
+        onReasoningDelta,
+        onToolCallDelta
       });
     }
 
@@ -93,7 +94,7 @@ function isEventStream(response) {
   return response.headers.get("content-type")?.includes("text/event-stream");
 }
 
-async function parseStreamResponse({ response, elapsedStartedAt, debug, onContentDelta, onReasoningDelta }) {
+async function parseStreamResponse({ response, elapsedStartedAt, debug, onContentDelta, onReasoningDelta, onToolCallDelta }) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -128,7 +129,7 @@ async function parseStreamResponse({ response, elapsedStartedAt, debug, onConten
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
       if (!choice) continue;
-      applyDelta(message, choice.delta || {}, { onContentDelta, onReasoningDelta });
+      applyDelta(message, choice.delta || {}, { onContentDelta, onReasoningDelta, onToolCallDelta });
     }
   }
 
@@ -171,6 +172,7 @@ function applyDelta(message, delta, callbacks) {
     if (toolCall.function?.arguments) current.function.arguments += toolCall.function.arguments;
     message.tool_calls[index] = current;
   }
+  if (delta.tool_calls?.length) callbacks.onToolCallDelta?.(delta.tool_calls);
 }
 
 async function parseResponse(response) {

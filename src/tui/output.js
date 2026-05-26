@@ -228,12 +228,7 @@ export function createOutput({
       console.log("");
       console.log(paint("green", "Answer"));
       line();
-      activeAnswer = createMarkdownStreamRenderer({
-        paint,
-        write(value) {
-          process.stdout.write(value);
-        }
-      });
+      activeAnswer = createRawStreamRenderer();
     },
 
     answerDelta(text) {
@@ -384,6 +379,16 @@ function createPalette(color) {
     yellow: pc.yellow,
     red: pc.red,
     magenta: pc.magenta
+  };
+}
+
+function createRawStreamRenderer() {
+  return {
+    write(value) {
+      process.stdout.write(String(value ?? ""));
+    },
+
+    flush() {}
   };
 }
 
