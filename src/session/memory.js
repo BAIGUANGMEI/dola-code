@@ -2,13 +2,13 @@ import { AUTO_COMPACT_MESSAGE_LIMIT, COMPACT_KEEP_MESSAGES } from "../constants.
 import { truncate } from "../utils/text.js";
 import { estimateMessageTokens } from "../utils/tokens.js";
 
-export function createSessionMemory({ maxEntries = 24 } = {}) {
-  const entries = [];
+export function createSessionMemory({ maxEntries = 24, entries: initialEntries = [] } = {}) {
+  const entries = initialEntries.slice(-maxEntries).map(normalizeEntry).filter(Boolean);
 
   return {
     addTurn({ prompt, turn, toolEvents = [], answer = "" }) {
       const entry = {
-        id: entries.length + 1,
+        id: nextEntryId(entries),
         createdAt: new Date().toISOString(),
         prompt: summarizeText(prompt, 220),
         answer: summarizeText(answer, 360),
@@ -37,6 +37,23 @@ export function createSessionMemory({ maxEntries = 24 } = {}) {
       return createCompactSummary({ messages, memoryEntries: entries });
     }
   };
+}
+
+function normalizeEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  return {
+    id: Number.isInteger(entry.id) ? entry.id : 0,
+    createdAt: entry.createdAt || new Date().toISOString(),
+    prompt: summarizeText(entry.prompt, 220),
+    answer: summarizeText(entry.answer, 360),
+    tools: String(entry.tools || "none"),
+    tokens: Number.isFinite(Number(entry.tokens)) ? Number(entry.tokens) : 0,
+    steps: Number.isFinite(Number(entry.steps)) ? Number(entry.steps) : 0
+  };
+}
+
+function nextEntryId(entries) {
+  return entries.reduce((max, entry) => Math.max(max, entry.id || 0), 0) + 1;
 }
 
 export function maybeAutoCompact({ messages, memory, ui, contextWindow = 0 }) {

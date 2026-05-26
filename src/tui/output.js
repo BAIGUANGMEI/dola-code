@@ -1,5 +1,4 @@
 import pc from "picocolors";
-import * as readline from "node:readline";
 import { formatTokenCount, formatUsage } from "../utils/tokens.js";
 import { truncate } from "../utils/text.js";
 import { formatSessionStats } from "../session/stats.js";
@@ -266,11 +265,10 @@ export function createOutput({
       if (activeNotes) return;
       activeNotes = {
         text: "",
-        startedAt: Date.now(),
-        headerLines: 3
+        startedAt: Date.now()
       };
       console.log("");
-      console.log(`${paint("magenta", "Model Notes")} ${paint("dim", "streaming, folds before answer")}`);
+      console.log(`${paint("magenta", "Model Notes")} ${paint("dim", "streaming")}`);
       line();
     },
 
@@ -285,12 +283,8 @@ export function createOutput({
       const notes = activeNotes;
       activeNotes = null;
 
-      if (process.stdout.isTTY) {
-        foldLiveNotes({ notes, paint });
-      } else {
-        console.log("");
-        console.log(paint("dim", `Model Notes folded chars=${notes.text.length} elapsed=${Date.now() - notes.startedAt}ms`));
-      }
+      console.log("");
+      console.log(paint("dim", `Model Notes complete chars=${notes.text.length} elapsed=${Date.now() - notes.startedAt}ms`));
     },
 
     toolStart(name, args) {
@@ -417,22 +411,6 @@ function truncateSingleLine(text, limit) {
   const line = String(text || "").replace(/\s+/g, " ").trim();
   if (line.length <= limit) return line;
   return `${line.slice(0, limit - 15)}...`;
-}
-
-function foldLiveNotes({ notes, paint }) {
-  process.stdout.write("\n");
-  const rows = notes.headerLines + visualLineCount(notes.text) + 1;
-  readline.moveCursor(process.stdout, 0, -rows);
-  readline.clearScreenDown(process.stdout);
-  console.log(paint("dim", `Model Notes folded chars=${notes.text.length} elapsed=${Date.now() - notes.startedAt}ms`));
-}
-
-function visualLineCount(text) {
-  if (!text) return 1;
-  const columns = Math.max(20, process.stdout.columns || 80);
-  return String(text).split(/\r?\n/).reduce((count, lineText) => {
-    return count + Math.max(1, Math.ceil(lineText.length / columns));
-  }, 0);
 }
 
 function summarizeToolResult(result) {

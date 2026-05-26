@@ -4,8 +4,8 @@ import { dirname, relative } from "node:path";
 import { workspacePath } from "../tools/workspace.js";
 import { createUnifiedDiff } from "../utils/diff.js";
 
-export function createChangeTracker({ cwd }) {
-  const changes = [];
+export function createChangeTracker({ cwd, changes: initialChanges = [] }) {
+  const changes = initialChanges.map(normalizeChange).filter(Boolean);
 
   return {
     async capture(pathValue) {
@@ -17,7 +17,7 @@ export function createChangeTracker({ cwd }) {
       if (sameSnapshot(before, after)) return null;
 
       const change = {
-        id: changes.length + 1,
+        id: nextChangeId(changes),
         toolName,
         action: inferAction({ toolName, before }),
         path: after.path,
@@ -54,6 +54,18 @@ export function createChangeTracker({ cwd }) {
       if (!change) return { ok: false, error: "No tracked changes to undo." };
       if (change.undoneAt) return { ok: false, error: `Change #${change.id} is already undone.` };
       return undoChange({ cwd, change, force });
+    },
+
+    clear() {
+      changes.splice(0);
+    },
+
+    snapshot() {
+      return changes.map((change) => ({
+        ...change,
+        before: { ...change.before },
+        after: { ...change.after }
+      }));
     }
   };
 }
@@ -139,4 +151,43 @@ function publicChange(change) {
     undoneAt: change.undoneAt,
     diff: change.diff
   };
+}
+
+function normalizeChange(change) {
+  if (!change || typeof change !== "object") return null;
+  if (!change.before || !change.after) return null;
+  const before = normalizeSnapshot(change.before);
+  const after = normalizeSnapshot(change.after);
+  return {
+    id: Number.isInteger(change.id) && change.id > 0 ? change.id : 0,
+    toolName: String(change.toolName || "unknown"),
+    action: String(change.action || "change"),
+    path: String(change.path || after.path || ""),
+    before,
+    after,
+    diff: String(change.diff || ""),
+    bytesBefore: normalizeBytes(change.bytesBefore),
+    bytesAfter: normalizeBytes(change.bytesAfter),
+    argsSummary: change.argsSummary && typeof change.argsSummary === "object" ? change.argsSummary : {},
+    createdAt: change.createdAt || new Date().toISOString(),
+    undoneAt: change.undoneAt || null
+  };
+}
+
+function normalizeSnapshot(snapshot) {
+  return {
+    file: String(snapshot.file || ""),
+    path: String(snapshot.path || ""),
+    exists: Boolean(snapshot.exists),
+    content: String(snapshot.content || "")
+  };
+}
+
+function normalizeBytes(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function nextChangeId(changes) {
+  return changes.reduce((max, change) => Math.max(max, change.id || 0), 0) + 1;
 }

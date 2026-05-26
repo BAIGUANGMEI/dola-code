@@ -24,6 +24,9 @@ Commands:
                   Switch active profile and persist that choice
   /limits         Show context window and max output token settings
   /status         Show config, context, and session usage together
+  /session        Show persisted session state and file path
+  /session save   Save the current session immediately
+  /session clear  Clear conversation, memory, logs, changes, and persisted state
   /theme          Show current terminal output mode
   /changes [id]   Show tracked file changes, or inspect one diff
   /undo [id]      Revert the latest active change, or a specific change

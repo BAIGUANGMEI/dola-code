@@ -12,6 +12,7 @@ import { createChangeTracker } from "../session/changes.js";
 import { compactMessagesWithSummary, createSessionMemory, maybeAutoCompact } from "../session/memory.js";
 import { buildAutoContext, buildRepoMap } from "../session/repo-map.js";
 import { createSessionStats } from "../session/stats.js";
+import { deleteSession, readSession, sessionPathForCwd, writeSession } from "../session/store.js";
 import { createOutput } from "../tui/output.js";
 import { createToolRunner } from "../tools/index.js";
 import { toolDefinitions } from "../tools/schema.js";
@@ -83,14 +84,42 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
     return answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes";
   };
 
-  const changeTracker = createChangeTracker({ cwd: activeConfig.cwd });
+  const persistedSession = await loadPersistedSession(activeConfig.cwd, ui);
+  const restoredMessages = restoreMessages({
+    cwd: activeConfig.cwd,
+    messages: persistedSession?.messages
+  });
+  const changeTracker = createChangeTracker({
+    cwd: activeConfig.cwd,
+    changes: persistedSession?.changes
+  });
   const callTool = createToolRunner({ cwd: activeConfig.cwd, confirm, changeTracker });
-  const messages = createInitialMessages(activeConfig.cwd);
-  const stats = createSessionStats();
-  const memory = createSessionMemory();
+  const messages = restoredMessages;
+  const stats = createSessionStats(persistedSession?.stats);
+  const memory = createSessionMemory({ entries: persistedSession?.memoryEntries });
   let repoMap = await refreshRepoMap({ cwd: activeConfig.cwd, ui, silent: true });
-  const toolLogs = [];
-  const turnLogs = [];
+  const toolLogs = Array.isArray(persistedSession?.toolLogs) ? persistedSession.toolLogs : [];
+  const turnLogs = Array.isArray(persistedSession?.turnLogs) ? persistedSession.turnLogs : [];
+  const sessionPath = sessionPathForCwd(activeConfig.cwd);
+  if (persistedSession) {
+    ui.info(`Restored persisted session: messages=${messages.length} memory=${memory.entries.length} changes=${changeTracker.list().length}`);
+  }
+  let sessionCreatedAt = persistedSession?.createdAt;
+  const persistSession = async () => {
+    const saved = await writeSession(activeConfig.cwd, {
+      createdAt: sessionCreatedAt,
+      profile: state.profile || state.activeProfile,
+      model: state.model,
+      messages,
+      memoryEntries: memory.entries,
+      stats: stats.snapshot(),
+      toolLogs,
+      turnLogs,
+      changes: changeTracker.snapshot()
+    });
+    sessionCreatedAt = saved.createdAt;
+    return saved;
+  };
   const printConfig = () => {
     ui.config([
       ["model", state.model],
@@ -133,6 +162,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         const resolved = resolveStoredConfig({ cwd: state.cwd, profileName: stored.profile });
         applyStoredConfig({ state, client, stored: resolved });
         activeConfig = { ...activeConfig, ...resolved };
+        await persistSession();
         console.log("Configuration reloaded.");
         continue;
       }
@@ -145,6 +175,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         printContext(messages, ui, state);
         ui.usage(stats);
         ui.info(`Stage memory entries: ${memory.entries.length}`);
+        ui.info(`Session file: ${sessionPath}`);
         continue;
       }
       if (trimmed === "/doctor") {
@@ -190,6 +221,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         const resolved = resolveStoredConfig({ cwd: state.cwd, profileName });
         applyStoredConfig({ state, client, stored: resolved });
         activeConfig = { ...activeConfig, ...resolved };
+        await persistSession();
         console.log(`Profile switched to ${profileName}`);
         continue;
       }
@@ -211,6 +243,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         } else {
           const result = await changeTracker.undo(args);
           ui.undoResult(result);
+          await persistSession();
         }
         continue;
       }
@@ -225,6 +258,35 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
       }
       if (trimmed === "/memory") {
         ui.memory(memory.entries);
+        continue;
+      }
+      if (trimmed === "/session") {
+        ui.config([
+          ["path", sessionPath],
+          ["messages", messages.length],
+          ["memory", memory.entries.length],
+          ["changes", changeTracker.list().length],
+          ["tool_logs", toolLogs.length],
+          ["turn_logs", turnLogs.length]
+        ]);
+        continue;
+      }
+      if (trimmed === "/session save") {
+        await persistSession();
+        ui.info(`Session saved to ${sessionPath}`);
+        continue;
+      }
+      if (trimmed === "/session clear") {
+        messages.splice(0, messages.length, ...createInitialMessages(state.cwd));
+        memory.clear();
+        stats.reset();
+        toolLogs.splice(0);
+        turnLogs.splice(0);
+        changeTracker.clear();
+        sessionCreatedAt = undefined;
+        await deleteSession(state.cwd);
+        await persistSession();
+        ui.info("Session cleared and persisted.");
         continue;
       }
       if (trimmed.startsWith("/tool-log")) {
@@ -279,6 +341,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         };
         toolLogs.push(log);
         ui.toolResult(result, { logId: log.id });
+        await persistSession();
         continue;
       }
       if (trimmed === "/cwd") {
@@ -288,11 +351,13 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
       if (trimmed === "/clear") {
         messages.splice(1);
         memory.clear();
+        await persistSession();
         console.log("Conversation context cleared.");
         continue;
       }
       if (trimmed === "/compact") {
         compactMessagesWithSummary({ messages, memory });
+        await persistSession();
         console.log(`Conversation compacted to ${messages.length} messages with a generated summary.`);
         continue;
       }
@@ -301,6 +366,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         state.model = model;
         client.setModel(state.model);
         persistModelSelection({ cwd: state.cwd, profileName: state.profile || state.activeProfile, model });
+        await persistSession();
         console.log(`Model switched to ${state.model} and persisted to profile ${state.profile || state.activeProfile}`);
         continue;
       }
@@ -332,13 +398,47 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
           answer,
           toolEvents: toolLogs.slice(toolStartIndex)
         });
+        await persistSession();
       } catch (error) {
         ui.error(error.message);
+        await persistSession();
       }
     }
   } finally {
-    rl.close();
+    try {
+      await persistSession();
+    } catch (error) {
+      ui.warn(`Could not persist session: ${error.message}`);
+    } finally {
+      rl.close();
+    }
   }
+}
+
+async function loadPersistedSession(cwd, ui) {
+  try {
+    return await readSession(cwd);
+  } catch (error) {
+    ui.warn(`Could not restore persisted session: ${error.message}`);
+    return null;
+  }
+}
+
+function restoreMessages({ cwd, messages }) {
+  const initial = createInitialMessages(cwd);
+  if (!Array.isArray(messages) || messages.length === 0) return initial;
+
+  const restored = messages
+    .filter((message) => message && typeof message === "object" && typeof message.role === "string")
+    .map((message) => ({ ...message }));
+  if (!restored.length) return initial;
+
+  if (restored[0].role === "system") {
+    restored[0] = initial[0];
+  } else {
+    restored.unshift(initial[0]);
+  }
+  return restored;
 }
 
 async function askPrompt(rl, ui, promptState) {
