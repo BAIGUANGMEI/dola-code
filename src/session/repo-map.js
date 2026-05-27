@@ -1,7 +1,13 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
-import { AUTO_CONTEXT_FILE_CHARS, AUTO_CONTEXT_MAX_CHARS } from "../constants.js";
+import {
+  AUTO_CONTEXT_FILE_CHARS,
+  AUTO_CONTEXT_MAX_CHARS,
+  AUTO_CONTEXT_MIN_CHARS,
+  AUTO_CONTEXT_WINDOW_RATIO
+} from "../constants.js";
 import { truncate } from "../utils/text.js";
+import { estimateTokensFromText } from "../utils/tokens.js";
 
 const IGNORED_DIRS = new Set([
   ".git",
@@ -59,21 +65,25 @@ export async function buildRepoMap({ cwd, maxFiles = 300, maxSymbols = 180 } = {
   };
 }
 
-export async function buildAutoContext({ cwd, prompt, memory, repoMap }) {
-  const relevantFiles = await findRelevantFiles({ cwd, prompt, repoMap });
-  const blocks = [];
+export async function buildAutoContext({ cwd, prompt, memory, repoMap, contextWindow = 0 }) {
+  const budget = contextBudget(contextWindow);
+  const relevantFiles = await findRelevantFiles({ cwd, prompt, repoMap, limit: budget.fileLimit });
+  const perFileChars = Math.max(800, Math.floor(budget.fileChars / Math.max(1, relevantFiles.length)));
+  const filesBlock = relevantFiles.length
+    ? `Relevant files selected for this task:\n${relevantFiles.map((file) => renderRelevantFile(file, perFileChars)).join("\n\n")}`
+    : "";
+  const memoryBlock = memory?.render?.({ budgetChars: budget.memoryChars }) || "";
+  const repoBlock = renderRepoDigest({ repoMap, prompt, budgetChars: budget.repoChars });
 
-  if (memory?.summary) {
-    blocks.push(`Long-task memory:\n${memory.summary}`);
-  }
+  const blocks = [
+    "Auto context schema=v2",
+    `Budget chars=${budget.totalChars} approx_tokens=${estimateTokensFromText("x".repeat(budget.totalChars))}`,
+    repoBlock,
+    filesBlock,
+    memoryBlock ? `Memory facts:\n${memoryBlock}` : ""
+  ].filter(Boolean);
 
-  blocks.push(repoMap.rendered);
-
-  if (relevantFiles.length) {
-    blocks.push(`Relevant files selected for this task:\n${relevantFiles.map(renderRelevantFile).join("\n\n")}`);
-  }
-
-  return truncate(blocks.join("\n\n"), AUTO_CONTEXT_MAX_CHARS);
+  return truncate(blocks.join("\n\n"), budget.totalChars);
 }
 
 export async function findRelevantFiles({ cwd, prompt, repoMap, limit = 5 }) {
@@ -98,7 +108,9 @@ export async function findRelevantFiles({ cwd, prompt, repoMap, limit = 5 }) {
         path: file.path,
         score: file.score,
         symbols: repoMap.symbols.filter((symbol) => symbol.path === file.path).slice(0, 12),
-        content: truncate(content, AUTO_CONTEXT_FILE_CHARS)
+        content: truncate(content, AUTO_CONTEXT_FILE_CHARS),
+        source: { type: "file", path: file.path },
+        confidence: Math.min(0.95, 0.55 + file.score * 0.05)
       });
     } catch {
       results.push({ path: file.path, score: file.score, symbols: [], content: "" });
@@ -122,6 +134,40 @@ export function renderRepoMap({ files, symbols }) {
     rows.push("- no source symbols detected yet");
   }
   return rows.join("\n");
+}
+
+export function renderRepoDigest({ repoMap, prompt = "", budgetChars = 2_000 }) {
+  const terms = extractQueryTerms(prompt);
+  const matchingSymbols = repoMap.symbols
+    .map((symbol) => ({
+      ...symbol,
+      score: terms.length ? scoreText(`${symbol.name} ${symbol.path}`, terms) : 1
+    }))
+    .filter((symbol) => symbol.score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, 30);
+  const matchingFiles = repoMap.files
+    .map((file) => ({
+      ...file,
+      score: terms.length ? scoreText(file.path, terms) : 1
+    }))
+    .filter((file) => file.score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, 40);
+
+  const rows = [
+    "Repo digest:",
+    `- indexed files=${repoMap.files.length} symbols=${repoMap.symbols.length} createdAt=${repoMap.createdAt}`
+  ];
+  if (matchingFiles.length) {
+    rows.push("- relevant paths:");
+    rows.push(...matchingFiles.map((file) => `  - ${file.path}`));
+  }
+  if (matchingSymbols.length) {
+    rows.push("- relevant symbols:");
+    rows.push(...matchingSymbols.map((symbol) => `  - ${symbol.name} (${symbol.kind}) ${symbol.path}:${symbol.line}`));
+  }
+  return truncate(rows.join("\n"), budgetChars);
 }
 
 async function collectFiles({ cwd, dir, maxFiles }) {
@@ -201,11 +247,11 @@ function scoreFile({ file, terms, symbols }) {
   }, 0);
 }
 
-function renderRelevantFile(file) {
+function renderRelevantFile(file, maxChars = AUTO_CONTEXT_FILE_CHARS) {
   const symbols = file.symbols.length
     ? `symbols: ${file.symbols.map((symbol) => `${symbol.name}@${symbol.line}`).join(", ")}\n`
     : "";
-  return `${file.path} score=${file.score}\n${symbols}\`\`\`text\n${file.content}\n\`\`\``;
+  return `${file.path} score=${file.score} confidence=${file.confidence?.toFixed?.(2) || "0.60"} source=file:${file.path}\n${symbols}\`\`\`text\n${truncate(file.content, maxChars)}\n\`\`\``;
 }
 
 function isSourceFile(path) {
@@ -214,4 +260,21 @@ function isSourceFile(path) {
 
 function normalizePath(path) {
   return path.replace(/\\/g, "/");
+}
+
+function contextBudget(contextWindow) {
+  const windowChars = contextWindow > 0 ? Math.floor(contextWindow * 4 * AUTO_CONTEXT_WINDOW_RATIO) : AUTO_CONTEXT_MAX_CHARS;
+  const totalChars = Math.max(AUTO_CONTEXT_MIN_CHARS, Math.min(AUTO_CONTEXT_MAX_CHARS, windowChars));
+  return {
+    totalChars,
+    fileLimit: totalChars > 12_000 ? 5 : 3,
+    fileChars: Math.max(1_800, Math.floor(totalChars * 0.42)),
+    memoryChars: Math.max(1_200, Math.floor(totalChars * 0.28)),
+    repoChars: Math.max(1_000, Math.floor(totalChars * 0.20))
+  };
+}
+
+function scoreText(text, terms) {
+  const haystack = String(text || "").toLowerCase();
+  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }

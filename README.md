@@ -152,12 +152,12 @@ npm start -- --no-stream
 
 CLI 会在每轮任务前自动构造轻量上下文：
 
-- repo map：当前项目文件列表
-- symbol map：从常见源码文件中提取的函数、类、导出符号和 Markdown 标题
-- relevant files：根据用户任务关键词自动挑选的相关文件片段
-- stage memory：长任务中的阶段性任务、工具结果和回答摘要
+- repo digest：只注入和当前任务相关的路径/符号摘要，不再每轮塞完整 repo map
+- relevant files：根据用户任务关键词自动挑选相关文件片段，并带 source/confidence
+- memory facts：长任务中的事实按 schema 记录，包含 scope、source、recency、confidence、stale 状态
+- dynamic budget：根据配置的 context window 动态裁剪 repo、memory、file blocks
 
-当对话变长时，CLI 会自动生成 compact summary，并保留最近消息，减少上下文膨胀。工具结果写回模型上下文时也会做摘要压缩；完整工具结果仍可用 `/tool-log <id>` 查看。
+当对话变长时，CLI 会自动生成结构化 compact summary，并保留最近消息，减少上下文膨胀。工具结果写回模型上下文时也会做摘要压缩；完整工具结果仍可用 `/tool-log <id>` 查看。
 
 ## 终端输出
 

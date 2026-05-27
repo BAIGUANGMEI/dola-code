@@ -105,7 +105,10 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
   });
   const messages = restoredMessages;
   const stats = createSessionStats(persistedSession?.stats);
-  const memory = createSessionMemory({ entries: persistedSession?.memoryEntries });
+  const memory = createSessionMemory({
+    entries: persistedSession?.memoryEntries,
+    facts: persistedSession?.memoryFacts
+  });
   let repoMap = await refreshRepoMap({ cwd: activeConfig.cwd, ui, silent: true });
   const toolLogs = Array.isArray(persistedSession?.toolLogs) ? persistedSession.toolLogs : [];
   const turnLogs = Array.isArray(persistedSession?.turnLogs) ? persistedSession.turnLogs : [];
@@ -121,6 +124,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
       model: state.model,
       messages,
       memoryEntries: memory.entries,
+      memoryFacts: memory.facts,
       stats: stats.snapshot(),
       toolLogs,
       turnLogs,
@@ -293,6 +297,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
       }
       if (trimmed === "/memory") {
         ui.memory(memory.entries);
+        ui.facts(memory.facts);
         continue;
       }
       if (trimmed === "/session") {
@@ -418,7 +423,8 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         cwd: state.cwd,
         prompt,
         memory,
-        repoMap
+        repoMap,
+        contextWindow: state.contextWindow
       });
       const promptWithContext = `${expandedPrompt}\n\nAuto context:\n${autoContext}`;
       ui.autoContext({ repoMap, autoContext });

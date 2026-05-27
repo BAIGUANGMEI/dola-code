@@ -77,7 +77,8 @@ export function createOutput({
 
     autoContext({ repoMap, autoContext }) {
       const chars = String(autoContext || "").length;
-      console.log(paint("dim", `Auto Context repo_files=${repoMap.files.length} symbols=${repoMap.symbols.length} chars=${chars}`));
+      const approxTokens = Math.ceil(chars / 4);
+      console.log(paint("dim", `Auto Context v2 repo_files=${repoMap.files.length} symbols=${repoMap.symbols.length} chars=${chars} tokens~${approxTokens}`));
     },
 
     repoMap(repoMap) {
@@ -99,6 +100,18 @@ export function createOutput({
         `${paint("dim", `#${String(entry.id).padEnd(3)}`)} steps=${entry.steps} tokens=${entry.tokens} tools=${entry.tools}`,
         `task: ${entry.prompt}`,
         entry.answer ? `result: ${entry.answer}` : "result: -"
+      ].join("\n")));
+    },
+
+    facts(facts) {
+      if (!facts.length) {
+        this.info("No memory facts yet.");
+        return;
+      }
+      this.panel("Memory Facts", facts.slice(0, 20).map((fact) => [
+        `${paint("dim", fact.id.padEnd(14))} scope=${fact.scope} kind=${fact.kind} confidence=${Number(fact.confidence).toFixed(2)} stale=${String(fact.stale)}`,
+        `source: ${formatFactSource(fact.source)}`,
+        `text: ${fact.text}`
       ].join("\n")));
     },
 
@@ -483,6 +496,14 @@ function summarizeArgs(args = {}) {
   if (args.query) return `query=${truncateSingleLine(args.query, 80)}`;
   const keys = Object.keys(args);
   return keys.length ? `args=${keys.join(",")}` : "";
+}
+
+function formatFactSource(source = {}) {
+  const parts = [source.type || "unknown"];
+  if (source.id !== undefined) parts.push(`#${source.id}`);
+  if (source.tool) parts.push(source.tool);
+  if (source.path) parts.push(source.path);
+  return parts.join(":");
 }
 
 function formatChangeStatus(change, paint) {

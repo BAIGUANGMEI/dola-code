@@ -48,6 +48,7 @@ function normalizeSession(session = {}) {
     model: stringOrEmpty(session.model),
     messages: normalizeArray(session.messages),
     memoryEntries: normalizeArray(session.memoryEntries),
+    memoryFacts: normalizeArray(session.memoryFacts),
     stats: session.stats && typeof session.stats === "object" ? session.stats : {},
     toolLogs: normalizeArray(session.toolLogs),
     turnLogs: normalizeArray(session.turnLogs),
