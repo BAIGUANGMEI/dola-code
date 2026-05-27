@@ -432,7 +432,7 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
       messages.push({ role: "user", content: promptWithContext });
       try {
         const toolStartIndex = toolLogs.length;
-        const turn = await runAgent({ messages, client, callTool, ui, stats, toolLogs, turnLogs });
+        const turn = await runAgent({ messages, client, callTool, ui, stats, toolLogs, turnLogs, prompt });
         const answer = latestAssistantContent(messages);
         memory.addTurn({
           prompt,

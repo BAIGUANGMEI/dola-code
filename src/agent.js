@@ -1,5 +1,6 @@
 import { MAX_AGENT_STEPS, MAX_HISTORY_MESSAGES } from "./constants.js";
 import { createContentRouter, splitAssistantContent } from "./agent/content-router.js";
+import { createRecoveryPlan, createTaskState, evaluateFinalReadiness, observeToolEvent } from "./agent/task-state.js";
 import { createSystemPrompt } from "./prompts.js";
 import { compressToolResultForModel } from "./session/tool-summary.js";
 import { toolDefinitions } from "./tools/schema.js";
@@ -10,8 +11,11 @@ export function createInitialMessages(cwd) {
   return [{ role: "system", content: createSystemPrompt(cwd) }];
 }
 
-export async function runAgent({ messages, client, callTool, ui = createOutput(), stats = null, toolLogs = [], turnLogs = [] }) {
+export async function runAgent({ messages, client, callTool, ui = createOutput(), stats = null, toolLogs = [], turnLogs = [], prompt = "" }) {
   const turn = createTurnStats();
+  const task = createTaskState({ prompt });
+  turn.task = task;
+  ui.taskStatus?.(task);
 
   for (let step = 1; step <= MAX_AGENT_STEPS; step += 1) {
     turn.steps = step;
@@ -172,6 +176,14 @@ export async function runAgent({ messages, client, callTool, ui = createOutput()
 
     const toolCalls = assistant.tool_calls || [];
     if (toolCalls.length === 0) {
+      const readiness = evaluateFinalReadiness(task, assistant.content || "");
+      if (!readiness.ok && !task.selfCheckRequested && step < MAX_AGENT_STEPS) {
+        turn.notes += `${turn.notes ? "\n\n" : ""}Task gate follow-up:\n${readiness.followUp}`;
+        ui.taskGate?.({ readiness, task });
+        messages.push({ role: "user", content: readiness.followUp });
+        continue;
+      }
+      ui.taskStatus?.(task);
       const log = finishTurn({ turn, turnLogs, ui, reason: "completed" });
       if (!answerOutput) outputFinalAnswer({ ui, content: assistant.content });
       return log;
@@ -184,10 +196,15 @@ export async function runAgent({ messages, client, callTool, ui = createOutput()
     for (const toolCall of toolCalls) {
       const toolEvent = await handleToolCall({ messages, toolCall, callTool, ui, toolLogs });
       turn.tools.push(toolEvent);
+      observeToolEvent(task, toolEvent);
+      ui.taskStatus?.(task);
     }
   }
 
   ui.warn(`Reached max agent steps (${MAX_AGENT_STEPS}); paused this turn.`);
+  const recoveryPlan = createRecoveryPlan(task);
+  turn.notes += `${turn.notes ? "\n\n" : ""}Recovery plan:\n${recoveryPlan.nextSteps.map((step) => `- ${step}`).join("\n")}`;
+  ui.recoveryPlan?.(recoveryPlan);
   return finishTurn({ turn, turnLogs, ui, reason: "max_steps" });
 }
 
@@ -210,6 +227,15 @@ function finishTurn({ turn, turnLogs, ui, reason }) {
     reason,
     steps: turn.steps,
     tools: turn.tools,
+    task: {
+      status: turn.task?.status,
+      acceptanceCriteria: turn.task?.acceptanceCriteria || [],
+      requiresVerification: Boolean(turn.task?.requiresVerification),
+      phases: turn.task?.phases,
+      failures: turn.task?.failures || [],
+      verification: turn.task?.verification || [],
+      recoveryPlan: turn.task?.recoveryPlan
+    },
     notes: turn.notes,
     promptTokens: turn.promptTokens,
     completionTokens: turn.completionTokens,

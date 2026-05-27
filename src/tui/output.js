@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import * as readline from "node:readline";
 import { formatTokenCount, formatUsage } from "../utils/tokens.js";
 import { truncate } from "../utils/text.js";
 import { formatSessionStats } from "../session/stats.js";
@@ -65,6 +66,9 @@ export function createOutput({
         `${paint("dim", "reason".padEnd(12))} ${log.reason}`,
         `${paint("dim", "steps".padEnd(12))} ${log.steps}`,
         `${paint("dim", "tools".padEnd(12))} ${toolSummary}`,
+        `${paint("dim", "task".padEnd(12))} ${log.task?.status || "-"}`,
+        `${paint("dim", "criteria".padEnd(12))} ${(log.task?.acceptanceCriteria || []).join("; ") || "-"}`,
+        `${paint("dim", "verify".padEnd(12))} ${log.task?.requiresVerification ? "required" : "optional"} / ${log.task?.phases?.verified ? "done" : "not-done"}`,
         `${paint("dim", "tokens".padEnd(12))} prompt=${log.promptTokens} completion=${log.completionTokens} total=${log.totalTokens}`,
         `${paint("dim", "elapsed".padEnd(12))} ${log.elapsedMs}ms`,
         `${paint("dim", "notes".padEnd(12))} ${truncate(log.notes || "", 8000)}`
@@ -73,6 +77,33 @@ export function createOutput({
 
     usage(stats) {
       console.log(`${paint("cyan", "Session Usage")} ${formatSessionStats(stats)}`);
+    },
+
+    taskStatus(task) {
+      if (!task) return;
+      const phases = task.phases || {};
+      const status = [
+        `Task ${task.status}`,
+        `inspect=${phases.inspected ? "yes" : "no"}`,
+        `edit=${phases.edited ? "yes" : "no"}`,
+        `verify=${phases.verified ? "yes" : "no"}`,
+        `criteria=${task.acceptanceCriteria?.length || 0}`
+      ].join("  |  ");
+      console.log(paint("dim", status));
+    },
+
+    taskGate({ readiness }) {
+      console.log(`${paint("yellow", "Task Gate")} ${paint("dim", "continuing before accepting final answer")}`);
+      for (const item of readiness.missing || []) {
+        console.log(`${paint("yellow", "-")} ${item}`);
+      }
+    },
+
+    recoveryPlan(plan) {
+      console.log(`${paint("yellow", "Recovery Plan")} ${paint("dim", plan.reason || "paused")}`);
+      for (const step of plan.nextSteps || []) {
+        console.log(`${paint("yellow", "-")} ${step}`);
+      }
     },
 
     autoContext({ repoMap, autoContext }) {
@@ -441,15 +472,38 @@ function createBufferedMarkdownRenderer({ paint }) {
   let text = "";
   return {
     write(value) {
-      text += String(value ?? "");
+      const chunk = String(value ?? "");
+      text += chunk;
+      process.stdout.write(chunk);
     },
 
     flush() {
+      if (process.stdout.isTTY && text) {
+        clearStreamedText(text);
+      } else if (text && !text.endsWith("\n")) {
+        process.stdout.write("\n");
+      }
       const rendered = renderMarkdown(text, { paint });
       if (rendered) process.stdout.write(rendered);
       text = "";
     }
   };
+}
+
+function clearStreamedText(text) {
+  process.stdout.write("\n");
+  readline.moveCursor(process.stdout, 0, -(visualLineCount(text) + 1));
+  readline.clearScreenDown(process.stdout);
+}
+
+function visualLineCount(text) {
+  if (!text) return 0;
+  const columns = Math.max(20, process.stdout.columns || 80);
+  const lines = String(text).split(/\r?\n/);
+  return lines.reduce((count, lineText, index) => {
+    if (index === lines.length - 1 && lineText === "") return count;
+    return count + Math.max(1, Math.ceil(lineText.length / columns));
+  }, 0);
 }
 
 function formatStickyStatus({ state, messages, estimatedTokens, stats }) {

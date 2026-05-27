@@ -159,6 +159,19 @@ CLI 会在每轮任务前自动构造轻量上下文：
 
 当对话变长时，CLI 会自动生成结构化 compact summary，并保留最近消息，减少上下文膨胀。工具结果写回模型上下文时也会做摘要压缩；完整工具结果仍可用 `/tool-log <id>` 查看。
 
+## 任务闭环
+
+每轮 agent 运行都会维护一个轻量 task state：
+
+- 自动推导验收条件，例如是否需要 inspect、edit、verify
+- 工具调用会推进阶段：inspect / edit / verify / diagnose
+- 修改文件或修复/测试/构建类任务会要求验证
+- 最终回答前会做 task gate self-check
+- 如果缺少必要验证或失败诊断，会自动追加一轮 follow-up，让模型继续验证或说明阻塞原因
+- 达到最大 step 时会生成 recovery plan，提示下一步应该从哪里恢复
+
+这些信息会显示在 TUI 的 Task 状态行里，也会记录到 `/turn-log <id>`。
+
 ## 终端输出
 
 CLI 会在每次模型请求时显示：
