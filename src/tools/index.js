@@ -7,9 +7,9 @@ import {
   writeTextFile
 } from "./workspace.js";
 
-export function createToolRunner({ cwd, confirm, changeTracker = null }) {
+export function createToolRunner({ cwd, confirm, changeTracker = null, onCommandOutput = null }) {
   return async function callTool(name, params) {
-    const context = { cwd, params, confirm };
+    const context = { cwd, params, confirm, onCommandOutput };
     const trackable = name === "write_file" || name === "edit_file";
     const before = trackable ? await changeTracker?.capture(params.path) : null;
     let result;

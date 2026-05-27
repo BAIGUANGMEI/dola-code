@@ -29,8 +29,11 @@ Commands:
   /session clear  Clear conversation, memory, logs, changes, and persisted state
   /theme          Show current terminal output mode
   /changes [id]   Show tracked file changes, or inspect one diff
+  /accept [id]    Mark the latest or selected change as accepted
+  /reject [id]    Revert the latest or selected reviewable change
   /undo [id]      Revert the latest active change, or a specific change
                   Add --force only when you want to overwrite local drift
+  /timeline       Show tool call timeline
   /turn-log <id>  Expand folded model notes and turn summary
   /tool-log <id>  Expand a folded tool call result
   /tools          List available workspace tools
@@ -43,6 +46,7 @@ Commands:
 
 Prompt shortcuts:
   @path           Attach a workspace file or directory listing to the next prompt
+                  Press Tab after @ or @partial/path for file suggestions
   !command        Run a shell command with the same approval gate as tool calls
 
 Configuration:

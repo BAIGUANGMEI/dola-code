@@ -94,7 +94,10 @@ npm start -- --init
 - `/status`: 一次性查看配置、上下文和当前会话累计 usage
 - `/theme`: 查看当前终端输出模式
 - `/changes [id]`: 查看本会话已追踪的文件变更；带 id 时展开该变更的 diff
+- `/accept [id]`: 接受最近一次或指定变更，让变更面板显示为 accepted
+- `/reject [id]`: 拒绝最近一次或指定变更，并回滚对应 diff
 - `/undo [id]`: 回退最近一次活动变更；带 id 时回退指定变更；确认要覆盖当前文件漂移时可加 `--force`
+- `/timeline`: 查看本会话工具调用时间线
 - `/turn-log <id>`: 展开折叠后的 Model Notes 和 Turn Summary
 - `/tool-log <id>`: 展开折叠后的工具调用详细日志
 - `/tools`: 列出当前可用的 workspace 工具
@@ -108,7 +111,7 @@ npm start -- --init
 
 Prompt 快捷方式：
 
-- `@path`: 把 workspace 内的文件内容或目录列表附加到下一条 prompt
+- `@path`: 把 workspace 内的文件内容或目录列表附加到下一条 prompt；输入 `@` 或 `@partial/path` 后按 Tab 会推荐候选文件
 - `!command`: 直接运行 shell 命令，仍然走确认机制
 
 有副作用的工具默认需要确认，例如写文件和执行 shell 命令。如果你要让 agent 自动执行，可以用：
@@ -143,7 +146,7 @@ npm start -- --no-stream
 - `edit_file`: 基于精确字符串替换文件内容
 - `run_command`: 执行 shell 命令
 
-文件写入和编辑会在当前 CLI 会话内记录为可审计变更。可以用 `/changes` 查看变更列表，用 `/changes <id>` 查看单个 unified diff，用 `/undo` 或 `/undo <id>` 回退。回退前会检查当前文件内容是否仍然等于 agent 写入后的快照；如果文件已经被其他操作改过，会拒绝覆盖并提示冲突。确认要覆盖当前文件漂移时，可以使用 `/undo <id> --force`。
+文件写入和编辑会在当前 CLI 会话内记录为可审计变更。可以用 `/changes` 查看变更列表，用 `/changes <id>` 查看单个 unified diff，用 `/accept <id>` 标记接受，用 `/reject <id>` 回滚。回退前会检查当前文件内容是否仍然等于 agent 写入后的快照；如果文件已经被其他操作改过，会拒绝覆盖并提示冲突。确认要覆盖当前文件漂移时，可以使用 `/reject <id> --force`。
 
 ## 长任务上下文
 
@@ -168,9 +171,10 @@ CLI 会在每次模型请求时显示：
 - 上下文 token 估算
 - 模型请求耗时和 token usage 的折叠摘要
 - 工具调用默认折叠，只显示状态、耗时和 `/tool-log <id>`
+- `/timeline` 可以按时间线查看工具调用编号、状态、耗时和摘要
 - 工具输出默认折叠，使用 `/tool-log <id>` 展开详细 JSON
 - 写文件和编辑文件会显示 unified diff，并记录到 `/changes`
-- 模型回答支持流式 Markdown 渲染：标题、列表、任务列表、引用、代码块、inline code、链接和表格会转换成终端友好格式
+- 模型回答支持流式 Markdown 渲染：标题、列表、任务列表、引用、带行号代码块、inline code、链接和表格会转换成终端友好格式
 - 如果网关不支持流式输出，可用 `--no-stream` 关闭
 - 模型显式返回的可见 reasoning 字段会在思考过程中流式显示，结束后折叠为 Model Notes
 - Turn Summary 默认折叠，使用 `/turn-log <id>` 展开

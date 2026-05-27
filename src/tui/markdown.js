@@ -2,6 +2,7 @@ export function createMarkdownStreamRenderer({ write, paint }) {
   let buffer = "";
   let inCodeBlock = false;
   let codeLanguage = "";
+  let codeLines = [];
 
   return {
     write(chunk) {
@@ -9,29 +10,41 @@ export function createMarkdownStreamRenderer({ write, paint }) {
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
-        write(`${renderLine(line)}\n`);
+        const rendered = renderLine(line);
+        if (rendered !== null) write(`${rendered}\n`);
       }
     },
 
     flush() {
       if (buffer) {
-        write(renderLine(buffer));
+        const rendered = renderLine(buffer);
+        if (rendered !== null) write(rendered);
         buffer = "";
       }
+      if (inCodeBlock) write(renderCodeBlock(codeLines, codeLanguage, paint));
     }
   };
 
   function renderLine(line) {
     const fence = line.match(/^\s*```([A-Za-z0-9_-]*)\s*$/);
     if (fence) {
-      inCodeBlock = !inCodeBlock;
-      codeLanguage = inCodeBlock ? fence[1] : "";
-      return inCodeBlock
-        ? paint("cyan", `Code${codeLanguage ? ` ${codeLanguage}` : ""}`)
-        : paint("dim", "End Code");
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeLanguage = fence[1] || "";
+        codeLines = [];
+        return "";
+      }
+      const rendered = renderCodeBlock(codeLines, codeLanguage, paint);
+      inCodeBlock = false;
+      codeLanguage = "";
+      codeLines = [];
+      return rendered;
     }
 
-    if (inCodeBlock) return paint("dim", line);
+    if (inCodeBlock) {
+      codeLines.push(line);
+      return null;
+    }
     return renderMarkdownLine(line, paint);
   }
 }
@@ -123,5 +136,17 @@ function looksLikeTableRow(line) {
 
 function renderTableRow(line, paint) {
   const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
-  return cells.map((cell) => renderInline(cell.trim(), paint)).join(paint("dim", " | "));
+  return `${paint("dim", "|")} ${cells.map((cell) => renderInline(cell.trim(), paint).padEnd(14)).join(paint("dim", " | "))} ${paint("dim", "|")}`;
+}
+
+function renderCodeBlock(lines, language, paint) {
+  const width = Math.min(process.stdout.columns || 80, 96);
+  const title = ` Code${language ? ` ${language}` : ""} `;
+  const top = paint("dim", `${title}${"-".repeat(Math.max(0, width - title.length))}`);
+  const body = lines.map((line, index) => {
+    const number = String(index + 1).padStart(3);
+    return `${paint("dim", `${number} |`)} ${paint("dim", line)}`;
+  });
+  const bottom = paint("dim", "-".repeat(width));
+  return [top, ...body, bottom].join("\n");
 }

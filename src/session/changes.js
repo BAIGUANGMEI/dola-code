@@ -32,6 +32,7 @@ export function createChangeTracker({ cwd, changes: initialChanges = [] }) {
         bytesAfter: after.exists ? Buffer.byteLength(after.content, "utf8") : 0,
         argsSummary: summarizeArgs(args),
         createdAt: new Date().toISOString(),
+        acceptedAt: null,
         undoneAt: null
       };
       changes.push(change);
@@ -50,10 +51,22 @@ export function createChangeTracker({ cwd, changes: initialChanges = [] }) {
     async undo({ id = null, force = false } = {}) {
       const change = id
         ? changes.find((item) => item.id === id)
-        : [...changes].reverse().find((item) => !item.undoneAt);
+        : [...changes].reverse().find((item) => !item.undoneAt && !item.acceptedAt);
       if (!change) return { ok: false, error: "No tracked changes to undo." };
       if (change.undoneAt) return { ok: false, error: `Change #${change.id} is already undone.` };
+      if (change.acceptedAt && !force) return { ok: false, error: `Change #${change.id} is accepted. Use --force to reject it anyway.` };
       return undoChange({ cwd, change, force });
+    },
+
+    accept({ id = null } = {}) {
+      const change = id
+        ? changes.find((item) => item.id === id)
+        : [...changes].reverse().find((item) => !item.undoneAt && !item.acceptedAt);
+      if (!change) return { ok: false, error: "No tracked changes to accept." };
+      if (change.undoneAt) return { ok: false, error: `Change #${change.id} is already rejected.` };
+      if (change.acceptedAt) return { ok: false, error: `Change #${change.id} is already accepted.` };
+      change.acceptedAt = new Date().toISOString();
+      return { ok: true, changeId: change.id, path: change.path, accepted: true };
     },
 
     clear() {
@@ -149,6 +162,7 @@ function publicChange(change) {
     argsSummary: change.argsSummary,
     createdAt: change.createdAt,
     undoneAt: change.undoneAt,
+    acceptedAt: change.acceptedAt,
     diff: change.diff
   };
 }
@@ -170,6 +184,7 @@ function normalizeChange(change) {
     bytesAfter: normalizeBytes(change.bytesAfter),
     argsSummary: change.argsSummary && typeof change.argsSummary === "object" ? change.argsSummary : {},
     createdAt: change.createdAt || new Date().toISOString(),
+    acceptedAt: change.acceptedAt || null,
     undoneAt: change.undoneAt || null
   };
 }

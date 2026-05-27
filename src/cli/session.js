@@ -5,7 +5,7 @@ import { createInitialMessages, runAgent } from "../agent.js";
 import { ModelArkClient } from "../client/modelark.js";
 import { createConfig } from "../config.js";
 import { doctor } from "../doctor.js";
-import { expandFileReferences } from "./references.js";
+import { createReferenceCompleter, expandFileReferences } from "./references.js";
 import { listProfiles, persistModelSelection, readLocalConfig, resolveStoredConfig, setActiveProfile } from "../settings/store.js";
 import { runConfigWizard } from "../settings/wizard.js";
 import { createChangeTracker } from "../session/changes.js";
@@ -33,7 +33,11 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
     return;
   }
 
-  const rl = readline.createInterface({ input, output });
+  const rl = readline.createInterface({
+    input,
+    output,
+    completer: createReferenceCompleter({ cwd: config.cwd })
+  });
   const ui = createOutput({
     compact: config.compactOutput,
     verbose: config.verboseOutput
@@ -93,7 +97,12 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
     cwd: activeConfig.cwd,
     changes: persistedSession?.changes
   });
-  const callTool = createToolRunner({ cwd: activeConfig.cwd, confirm, changeTracker });
+  const callTool = createToolRunner({
+    cwd: activeConfig.cwd,
+    confirm,
+    changeTracker,
+    onCommandOutput: (event) => ui.commandOutput(event)
+  });
   const messages = restoredMessages;
   const stats = createSessionStats(persistedSession?.stats);
   const memory = createSessionMemory({ entries: persistedSession?.memoryEntries });
@@ -247,8 +256,34 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
         }
         continue;
       }
+      if (trimmed === "/reject" || trimmed.startsWith("/reject ")) {
+        const args = parseUndoArgs(trimmed.replace(/^\/reject/, "/undo"));
+        if (args.invalid) {
+          ui.warn("Usage: /reject [id] [--force]");
+        } else {
+          const result = await changeTracker.undo(args);
+          ui.undoResult(result);
+          await persistSession();
+        }
+        continue;
+      }
+      if (trimmed === "/accept" || trimmed.startsWith("/accept ")) {
+        const args = parseChangeArgs(trimmed.replace(/^\/accept/, "/changes"));
+        if (args.invalid) {
+          ui.warn("Usage: /accept [id]");
+        } else {
+          const result = changeTracker.accept({ id: args.id });
+          ui.acceptResult(result);
+          await persistSession();
+        }
+        continue;
+      }
       if (trimmed === "/tools") {
         ui.tools(toolDefinitions);
+        continue;
+      }
+      if (trimmed === "/timeline") {
+        ui.timeline(toolLogs);
         continue;
       }
       if (trimmed === "/repo-map") {
@@ -329,10 +364,11 @@ export async function runCli({ argv = process.argv.slice(2), cwd = process.cwd()
           ui.warn("Usage: !<shell command>");
           continue;
         }
-        ui.toolStart("run_command", { command });
+        const logId = toolLogs.length + 1;
+        ui.toolStart("run_command", { command }, { logId });
         const result = await callTool("run_command", { command });
         const log = {
-          id: toolLogs.length + 1,
+          id: logId,
           name: "run_command",
           args: { command },
           result,

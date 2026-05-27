@@ -2,7 +2,7 @@ import pc from "picocolors";
 import { formatTokenCount, formatUsage } from "../utils/tokens.js";
 import { truncate } from "../utils/text.js";
 import { formatSessionStats } from "../session/stats.js";
-import { createMarkdownStreamRenderer, renderMarkdown } from "./markdown.js";
+import { renderMarkdown } from "./markdown.js";
 
 export function createOutput({
   color = process.stdout.isTTY && !process.env.NO_COLOR,
@@ -119,17 +119,17 @@ export function createOutput({
         return;
       }
       this.panel("Changes", changes.map((change) => {
-        const status = change.undoneAt ? paint("dim", "undone") : paint("green", "active");
+        const status = formatChangeStatus(change, paint);
         const size = `${formatBytes(change.bytesBefore)} -> ${formatBytes(change.bytesAfter)}`;
         return [
           paint("dim", `#${String(change.id).padEnd(3)}`),
-          status.padEnd(14),
+          padAnsi(status, 14),
           change.action.padEnd(9),
           size.padEnd(18),
           change.path
         ].join(" ");
       }));
-      console.log(paint("dim", "Use /changes <id> to inspect a diff, /undo [id] to revert."));
+      console.log(paint("dim", "Use /changes <id> to inspect, /accept [id] to keep, /reject [id] to revert."));
       console.log("");
     },
 
@@ -138,16 +138,29 @@ export function createOutput({
         this.warn("Change not found.");
         return;
       }
-      const status = change.undoneAt ? "undone" : "active";
+      const status = change.undoneAt ? "rejected" : change.acceptedAt ? "accepted" : "active";
       this.panel(`Change ${change.id}`, [
         `${paint("dim", "status".padEnd(12))} ${status}`,
         `${paint("dim", "action".padEnd(12))} ${change.action}`,
         `${paint("dim", "path".padEnd(12))} ${change.path}`,
         `${paint("dim", "bytes".padEnd(12))} ${formatBytes(change.bytesBefore)} -> ${formatBytes(change.bytesAfter)}`,
         `${paint("dim", "created".padEnd(12))} ${change.createdAt}`,
+        `${paint("dim", "accepted".padEnd(12))} ${change.acceptedAt || "-"}`,
         `${paint("dim", "undone".padEnd(12))} ${change.undoneAt || "-"}`
       ]);
       if (change.diff) this.diff(change.diff);
+      if (!change.acceptedAt && !change.undoneAt) {
+        console.log(paint("dim", `Review: /accept ${change.id} or /reject ${change.id}`));
+      }
+      console.log("");
+    },
+
+    acceptResult(result) {
+      if (!result?.ok) {
+        this.warn(result?.error || "Accept failed.");
+        return;
+      }
+      console.log(`${paint("green", "Accept ok")} change=#${result.changeId} path=${result.path}`);
       console.log("");
     },
 
@@ -159,7 +172,7 @@ export function createOutput({
         }
         return;
       }
-      console.log(`${paint("green", "Undo ok")} change=#${result.changeId} path=${result.path} restored=${result.restored}`);
+      console.log(`${paint("green", "Reject ok")} change=#${result.changeId} path=${result.path} restored=${result.restored}`);
       if (result.diff) this.diff(result.diff);
       console.log("");
     },
@@ -228,13 +241,12 @@ export function createOutput({
       console.log("");
       console.log(paint("green", "Answer"));
       line();
-      activeAnswer = createRawStreamRenderer();
+      activeAnswer = createBufferedMarkdownRenderer({ paint });
     },
 
     answerDelta(text) {
       if (!activeAnswer) {
-        process.stdout.write(renderMarkdown(text, { paint }));
-        return;
+        activeAnswer = createBufferedMarkdownRenderer({ paint });
       }
       activeAnswer.write(text);
     },
@@ -282,11 +294,23 @@ export function createOutput({
       console.log(paint("dim", `Model Notes complete chars=${notes.text.length} elapsed=${Date.now() - notes.startedAt}ms`));
     },
 
-    toolStart(name, args) {
+    toolStart(name, args, meta = {}) {
       console.log("");
-      console.log(`${paint("yellow", "Tool")} ${paint("bold", name)}`);
-      if (!compact) {
+      const id = meta.logId ? `#${meta.logId} ` : "";
+      const argSummary = summarizeArgs(args);
+      console.log(`${paint("yellow", "Tool")} ${paint("bold", `${id}${name}`)} ${paint("dim", argSummary)}`);
+      if (verbose && !compact) {
         console.log(paint("dim", truncate(JSON.stringify(args, null, 2), verbose ? 4000 : 1200)));
+      } else {
+        console.log(paint("dim", meta.logId ? `args folded details=/tool-log ${meta.logId}` : "args folded"));
+      }
+    },
+
+    commandOutput({ stream, text }) {
+      const label = stream === "stderr" ? paint("red", "stderr") : paint("dim", "stdout");
+      for (const lineText of String(text || "").split(/\r?\n/)) {
+        if (!lineText) continue;
+        console.log(`${label} ${truncateSingleLine(lineText, 180)}`);
       }
     },
 
@@ -319,6 +343,24 @@ export function createOutput({
         `${paint("dim", "result".padEnd(10))} ${truncate(JSON.stringify(log.result, null, 2), 8000)}`
       ]);
       if (log.result?.diff) this.diff(log.result.diff);
+    },
+
+    timeline(logs) {
+      if (!logs.length) {
+        this.info("No tool calls yet.");
+        return;
+      }
+      this.panel("Tool Timeline", logs.map((log) => {
+        const status = log.ok ? paint("green", "ok") : paint("red", "failed");
+        const summary = summarizeToolResult(log.result);
+        return [
+          paint("dim", `#${String(log.id).padEnd(3)}`),
+          padAnsi(status, 8),
+          `${String(log.elapsedMs).padStart(5)}ms`,
+          log.name.padEnd(14),
+          summary
+        ].join(" ");
+      }));
     },
 
     diff(diffText) {
@@ -382,13 +424,18 @@ function createPalette(color) {
   };
 }
 
-function createRawStreamRenderer() {
+function createBufferedMarkdownRenderer({ paint }) {
+  let text = "";
   return {
     write(value) {
-      process.stdout.write(String(value ?? ""));
+      text += String(value ?? "");
     },
 
-    flush() {}
+    flush() {
+      const rendered = renderMarkdown(text, { paint });
+      if (rendered) process.stdout.write(rendered);
+      text = "";
+    }
   };
 }
 
@@ -427,6 +474,27 @@ function summarizeToolResult(result) {
   if (result.output) return `output_chars=${result.output.length}`;
   if (result.error) return result.error;
   return "";
+}
+
+function summarizeArgs(args = {}) {
+  if (!args || typeof args !== "object") return "";
+  if (args.path) return `path=${args.path}`;
+  if (args.command) return `command=${truncateSingleLine(args.command, 80)}`;
+  if (args.query) return `query=${truncateSingleLine(args.query, 80)}`;
+  const keys = Object.keys(args);
+  return keys.length ? `args=${keys.join(",")}` : "";
+}
+
+function formatChangeStatus(change, paint) {
+  if (change.undoneAt) return paint("dim", "rejected");
+  if (change.acceptedAt) return paint("green", "accepted");
+  return paint("yellow", "review");
+}
+
+function padAnsi(value, width) {
+  const text = String(value);
+  const visible = text.replace(/\x1b\[[0-9;]*m/g, "").length;
+  return text + " ".repeat(Math.max(0, width - visible));
 }
 
 function formatBytes(value) {

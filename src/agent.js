@@ -275,7 +275,7 @@ async function handleToolCall({ messages, toolCall, callTool, ui, toolLogs }) {
     return event;
   }
 
-  ui.toolStart(name, toolArgs);
+  ui.toolStart(name, toolArgs, { logId });
 
   let result;
   try {

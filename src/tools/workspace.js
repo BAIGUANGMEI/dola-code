@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import process from "node:process";
 import { MAX_FILE_CHARS } from "../constants.js";
 import { createUnifiedDiff } from "../utils/diff.js";
@@ -111,7 +111,7 @@ export async function editTextFile({ cwd, params, confirm }) {
   return { ok: true, path: relative(cwd, file), replacements: params.replace_all ? occurrences : 1, diff };
 }
 
-export async function runShellCommand({ cwd, params, confirm }) {
+export async function runShellCommand({ cwd, params, confirm, onCommandOutput }) {
   const command = params.command;
   const approved = await confirm(`Allow shell command: ${command}?`);
   if (!approved) return { ok: false, cancelled: true };
@@ -122,12 +122,47 @@ export async function runShellCommand({ cwd, params, confirm }) {
     const shellArgs = process.platform === "win32"
       ? ["-NoLogo", "-NoProfile", "-Command", command]
       : ["-lc", command];
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const child = spawn(shell, shellArgs, { cwd, windowsHide: true });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGTERM");
+    }, timeout);
 
-    execFile(shell, shellArgs, { cwd, timeout, windowsHide: true }, (error, stdout, stderr) => {
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      onCommandOutput?.({ stream: "stdout", text });
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      onCommandOutput?.({ stream: "stderr", text });
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       resolvePromise({
-        ok: !error,
-        exit_code: error?.code ?? 0,
-        error: error?.message,
+        ok: false,
+        exit_code: 1,
+        error: error.message,
+        stdout: truncate(stdout),
+        stderr: truncate(stderr)
+      });
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const timedOut = signal === "SIGTERM";
+      resolvePromise({
+        ok: code === 0 && !timedOut,
+        exit_code: code ?? 1,
+        signal,
+        error: timedOut ? `Command timed out after ${timeout}ms` : undefined,
         stdout: truncate(stdout),
         stderr: truncate(stderr)
       });
